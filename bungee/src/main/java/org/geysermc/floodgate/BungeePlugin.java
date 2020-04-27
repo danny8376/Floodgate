@@ -4,8 +4,12 @@ import lombok.Getter;
 import net.md_5.bungee.api.event.PlayerDisconnectEvent;
 import net.md_5.bungee.api.event.PreLoginEvent;
 import net.md_5.bungee.api.event.ServerConnectEvent;
+import net.md_5.bungee.api.event.ServerConnectedEvent;
 import net.md_5.bungee.api.plugin.Listener;
 import net.md_5.bungee.api.plugin.Plugin;
+import net.md_5.bungee.api.connection.ProxiedPlayer;
+import net.md_5.bungee.api.ChatMessageType;
+import net.md_5.bungee.api.chat.TextComponent;
 import net.md_5.bungee.event.EventHandler;
 import net.md_5.bungee.event.EventPriority;
 import net.md_5.bungee.protocol.packet.Handshake;
@@ -18,6 +22,12 @@ import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 
+import java.util.HashSet;
+import java.security.SecureRandom;
+import java.util.Random;
+import java.util.stream.IntStream;
+import me.vik1395.BungeeAuthAPI.RequestHandler;
+
 import static org.geysermc.floodgate.util.BedrockData.FLOODGATE_IDENTIFIER;
 
 public class BungeePlugin extends Plugin implements Listener {
@@ -28,6 +38,15 @@ public class BungeePlugin extends Plugin implements Listener {
     private BungeeDebugger debugger;
     private HandshakeHandler handshakeHandler;
 
+    private static final int PASSWORD_LENGTH = 8;
+    private static final char[] PASSWORD_CHARACTERS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".toCharArray();
+
+    private final Random random = new SecureRandom();
+
+    private Plugin bungeeAuth;
+
+    private HashSet<String> preLoginUsernames;
+
     @Override
     public void onLoad() {
         instance = this;
@@ -36,6 +55,8 @@ public class BungeePlugin extends Plugin implements Listener {
         }
         config = FloodgateConfig.load(getLogger(), getDataFolder().toPath().resolve("config.yml"), BungeeFloodgateConfig.class);
         handshakeHandler = new HandshakeHandler(config.getPrivateKey(), true, config.getUsernamePrefix(), config.isReplaceSpaces());
+
+        this.preLoginUsernames = new HashSet<String>();
     }
 
     @Override
@@ -44,6 +65,8 @@ public class BungeePlugin extends Plugin implements Listener {
         if (config.isDebug()) {
             debugger = new BungeeDebugger();
         }
+
+        this.bungeeAuth = getProxy().getPluginManager().getPlugin("BungeeAuth");
     }
 
     @Override
@@ -64,6 +87,16 @@ public class BungeePlugin extends Plugin implements Listener {
             );
             // Bungeecord will add his data after our data
         }
+    }
+
+    public String getRandomPassword() {
+        StringBuilder generatedPassword = new StringBuilder(8);
+        IntStream.rangeClosed(1, PASSWORD_LENGTH)
+            .map(i -> random.nextInt(PASSWORD_CHARACTERS.length - 1))
+            .mapToObj(pos -> PASSWORD_CHARACTERS[pos])
+            .forEach(generatedPassword::append);
+
+        return generatedPassword.toString();
     }
 
     @EventHandler(priority = EventPriority.LOW)
@@ -99,6 +132,11 @@ public class BungeePlugin extends Plugin implements Listener {
             event.getConnection().setOnlineMode(false);
             event.getConnection().setUniqueId(player.getJavaUniqueId());
 
+            if (this.bungeeAuth != null) {
+                this.preLoginUsernames.add(player.getJavaUsername());
+                getLogger().info("Player " + player.getUsername() + " with Java Username " + player.getJavaUsername() + " logged with floodgate and queue for bypass BungeeAuth");
+            }
+
             ReflectionUtil.setValue(event.getConnection(), "name", player.getJavaUsername());
             Object channelWrapper = ReflectionUtil.getValue(event.getConnection(), "ch");
             SocketAddress remoteAddress = ReflectionUtil.getCastedValue(channelWrapper, "remoteAddress", SocketAddress.class);
@@ -114,6 +152,25 @@ public class BungeePlugin extends Plugin implements Listener {
                 );
             }
             event.completeIntent(this);
+        });
+    }
+
+    @EventHandler
+    public void onServerConnected(ServerConnectedEvent serverConnectedEvent) {
+        ProxiedPlayer player = serverConnectedEvent.getPlayer();
+        String name = player.getName();
+        getProxy().getScheduler().runAsync(this, () -> {
+            if (this.bungeeAuth != null && this.preLoginUsernames.contains(name)) {
+                this.preLoginUsernames.remove(name);
+                RequestHandler requestHandler = new RequestHandler();
+                if (!requestHandler.isRegistered(name)) {
+                    String password = getRandomPassword();
+                    requestHandler.forceRegister(player, password);
+                    player.sendMessage(ChatMessageType.CHAT, TextComponent.fromLegacyText("Auto register with password: " + password));
+                }
+                requestHandler.forceLogin(name);
+                getLogger().info("Player " + player.getName() + " forced login with BungeeAuth");
+            }
         });
     }
 

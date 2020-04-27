@@ -37,6 +37,16 @@
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
+
+        <!--Login plugin-->
+        <dependency>
+            <groupId>me.vik1395</groupId>
+            <artifactId>BungeeAuth</artifactId>
+            <version>1.4</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/BungeeAuth-1.4.jar</systemPath>
+        </dependency>
+
     </dependencies>
 
     <build>
